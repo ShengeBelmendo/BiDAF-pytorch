@@ -31,6 +31,7 @@ def train(args, data):
     max_dev_exact, max_dev_f1 = -1, -1
 
     iterator = data.train_iter
+    iterator.repeat = True
     for i, batch in enumerate(iterator):
         present_epoch = int(iterator.epoch)
         if present_epoch == args.epoch:
@@ -49,7 +50,7 @@ def train(args, data):
 
         for name, param in model.named_parameters():
             if param.requires_grad:
-                ema.update(name, param.data)
+                param.data = ema.update(name, param.data)
 
         if (i + 1) % args.print_freq == 0:
             dev_loss, dev_exact, dev_f1 = test(model, ema, args, data)
