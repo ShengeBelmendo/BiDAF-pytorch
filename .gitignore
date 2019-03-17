@@ -1,3 +1,8 @@
 test.py
 *.ipynb
 .vector_cache
+.data*
+.vector*
+.idea*
+model/__py*
+utils/__*
