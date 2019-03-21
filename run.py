@@ -2,9 +2,10 @@ import argparse
 import copy, json, os
 
 import torch
+import sys
 from torch import nn, optim
 from tensorboardX import SummaryWriter
-from time import gmtime, strftime
+from time import localtime, strftime
 
 from model.model import BiDAF
 from model.data import SQuAD
@@ -12,9 +13,14 @@ from model.ema import EMA
 import evaluate
 
 
+
+
 def train(args, data):
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     model = BiDAF(args, data.WORD.vocab.vectors).to(device)
+    if torch.cuda.device_count() > 1:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+        model = nn.DataParallel(model)
 
     ema = EMA(args.exp_decay_rate)
     for name, param in model.named_parameters():
@@ -29,18 +35,22 @@ def train(args, data):
     model.train()
     loss, last_epoch = 0, -1
     max_dev_exact, max_dev_f1 = -1, -1
-
+    print('totally {} epoch'.format(args.epoch))
+    
+    sys.stdout.flush()
     iterator = data.train_iter
     iterator.repeat = True
     for i, batch in enumerate(iterator):
+
         present_epoch = int(iterator.epoch)
         if present_epoch == args.epoch:
+            print('present_epoch value:',present_epoch)
             break
         if present_epoch > last_epoch:
             print('epoch:', present_epoch + 1)
         last_epoch = present_epoch
 
-        p1, p2 = model(batch)
+        p1, p2 = model(batch.c_char,batch.q_char,batch.c_word[0],batch.q_word[0],batch.c_word[1],batch.q_word[1])
 
         optimizer.zero_grad()
         batch_loss = criterion(p1, batch.s_idx) + criterion(p2, batch.e_idx)
@@ -69,9 +79,10 @@ def train(args, data):
                 best_model = copy.deepcopy(model)
 
             loss = 0
-            model.train()
-
+            model.train() 
+        sys.stdout.flush()
     writer.close()
+    args.max_f1 = max_dev_f1
     print(f'max dev EM: {max_dev_exact:.3f} / max dev F1: {max_dev_f1:.3f}')
 
     return best_model
@@ -91,7 +102,9 @@ def test(model, ema, args, data):
             param.data.copy_(ema.get(name))
 
     for batch in iter(data.dev_iter):
-        p1, p2 = model(batch)
+        with torch.no_grad():
+            p1, p2 = model(batch.c_char,batch.q_char,batch.c_word[0],batch.q_word[0],batch.c_word[1],batch.q_word[1])
+        #p1, p2 = model(batch)
         batch_loss = criterion(p1, batch.s_idx) + criterion(p2, batch.e_idx)
         loss += batch_loss.item()
 
@@ -130,32 +143,42 @@ def main():
     parser.add_argument('--dev-batch-size', default=100, type=int)
     parser.add_argument('--dev-file', default='dev-v1.1.json')
     parser.add_argument('--dropout', default=0.2, type=float)
-    parser.add_argument('--epoch', default=12, type=int)
+    parser.add_argument('--epoch', default=15, type=int)
     parser.add_argument('--exp-decay-rate', default=0.999, type=float)
     parser.add_argument('--gpu', default=0, type=int)
     parser.add_argument('--hidden-size', default=100, type=int)
     parser.add_argument('--learning-rate', default=0.5, type=float)
     parser.add_argument('--print-freq', default=250, type=int)
-    parser.add_argument('--train-batch-size', default=60, type=int)
+    parser.add_argument('--train-batch-size', default=40, type=int)
     parser.add_argument('--train-file', default='train-v1.1.json')
     parser.add_argument('--word-dim', default=100, type=int)
+    parser.add_argument('--prediction_file', default='prediction.out')
+    parser.add_argument('--id', default=0, type=int)
     args = parser.parse_args()
 
     print('loading SQuAD data...')
     data = SQuAD(args)
     setattr(args, 'char_vocab_size', len(data.CHAR.vocab))
     setattr(args, 'word_vocab_size', len(data.WORD.vocab))
+    setattr(args, 'max_f1', 0)
     setattr(args, 'dataset_file', f'.data/squad/{args.dev_file}')
-    setattr(args, 'prediction_file', f'prediction{args.gpu}.out')
-    setattr(args, 'model_time', strftime('%H:%M:%S', gmtime()))
+    setattr(args, 'model_time', strftime('%Y.%m.%d-%H:%M:%S',localtime()) )
+    if not os.path.exists('predictions'):
+        os.makedirs('predictions')
+    args.prediction_file = 'predictions/'+args.model_time+'_'+'prediction'+str(args.id)+'.out'
     print('data loading complete!')
 
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    print(torch.cuda.is_available())
     print('training start!')
     best_model = train(args, data)
     if not os.path.exists('saved_models'):
         os.makedirs('saved_models')
-    torch.save(best_model.state_dict(), f'saved_models/BiDAF_{args.model_time}.pt')
+    torch.save(best_model.state_dict(), f'saved_models/{args.model_time}_BiDAF{args.id}__F1{args.max_f1:5.2f}.pt')
     print('training finished!')
+    with open(f'saved_models/{args.model_time}_BiDAF{args.id}_config.txt', 'w', encoding='utf-8') as f:
+        for argument in args.__dict__:
+            print(argument,args.__getattribute__(argument),file=f)    
 
 
 if __name__ == '__main__':

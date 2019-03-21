@@ -14,7 +14,7 @@ class BiDAF(nn.Module):
         self.char_emb = nn.Embedding(args.char_vocab_size, args.char_dim, padding_idx=1)
         nn.init.uniform_(self.char_emb.weight, -0.001, 0.001)
 
-        self.char_conv = nn.Conv2d(1, args.char_channel_size, (args.char_dim, args.char_channel_width))
+        self.char_conv = nn.Conv1d(args.char_dim, args.char_channel_size, args.char_channel_width)
 
         # 2. Word Embedding Layer
         # initialize word embedding with GloVe
@@ -25,7 +25,7 @@ class BiDAF(nn.Module):
         for i in range(2):
             setattr(self, f'highway_linear{i}',
                     nn.Sequential(Linear(args.hidden_size * 2, args.hidden_size * 2),
-                                  nn.ReLU()))
+                                  nn.ReLU(inplace=True)))
             setattr(self, f'highway_gate{i}',
                     nn.Sequential(Linear(args.hidden_size * 2, args.hidden_size * 2),
                                   nn.Sigmoid()))
@@ -67,9 +67,9 @@ class BiDAF(nn.Module):
                                 batch_first=True,
                                 dropout=args.dropout)
 
-        self.dropout = nn.Dropout(p=args.dropout)
+        self.dropout = nn.Dropout(p=args.dropout,inplace=True)
 
-    def forward(self, batch):
+    def forward(self, c_char,q_char,c_word,q_word,c_lens,q_lens):
         # TODO: More memory-efficient architecture
         def char_emb_layer(x):
             """
@@ -79,10 +79,10 @@ class BiDAF(nn.Module):
             batch_size = x.size(0)
             # (batch, seq_len, word_len, char_dim)
             x = self.dropout(self.char_emb(x))
-            # (batch * seq_len, 1, char_dim, word_len)
-            x = x.view(-1, self.args.char_dim, x.size(2)).unsqueeze(1)
-            # (batch * seq_len, char_channel_size, 1, conv_len) -> (batch * seq_len, char_channel_size, conv_len)
-            x = self.char_conv(x).squeeze()
+            # (batch * seq_len,char_dim, word_len)
+            x = x.view(-1, self.args.char_dim, x.size(2))
+            # (batch * seq_len, char_channel_size,conv_len)
+            x = self.char_conv(x)
             # (batch * seq_len, char_channel_size, 1) -> (batch * seq_len, char_channel_size)
             x = F.max_pool1d(x, x.size(2)).squeeze()
             # (batch, seq_len, char_channel_size)
@@ -169,26 +169,40 @@ class BiDAF(nn.Module):
             return p1, p2
 
         # 1. Character Embedding Layer
-        c_char = char_emb_layer(batch.c_char)
-        q_char = char_emb_layer(batch.q_char)
+       
+
+        c_maxlen = c_word.size()[1]
+        c_char = char_emb_layer(c_char)
+        q_char = char_emb_layer(q_char)
         # 2. Word Embedding Layer
-        c_word = self.word_emb(batch.c_word[0])
-        q_word = self.word_emb(batch.q_word[0])
-        c_lens = batch.c_word[1]
-        q_lens = batch.q_word[1]
+        c_word = self.word_emb(c_word)
+        q_word = self.word_emb(q_word)
+
+
+
 
         # Highway network
         c = highway_network(c_char, c_word)
         q = highway_network(q_char, q_word)
-        # 3. Contextual Embedding Layer
+        
+
+	# 3. Contextual Embedding Layer
         c = self.context_LSTM((c, c_lens))[0]
         q = self.context_LSTM((q, q_lens))[0]
+        
+
+
         # 4. Attention Flow Layer
         g = att_flow_layer(c, q)
+
         # 5. Modeling Layer
         m = self.modeling_LSTM2((self.modeling_LSTM1((g, c_lens))[0], c_lens))[0]
+      
         # 6. Output Layer
         p1, p2 = output_layer(g, m, c_lens)
+        p1_padded = F.pad(p1,(0,c_maxlen-p1.size()[-1]))
+        p2_padded = F.pad(p2,(0,c_maxlen-p2.size()[-1]))
+        
 
         # (batch, c_len), (batch, c_len)
-        return p1, p2
+        return p1_padded, p2_padded

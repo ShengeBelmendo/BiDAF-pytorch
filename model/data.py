@@ -66,15 +66,15 @@ class SQuAD():
             self.train.examples = [e for e in self.train.examples if len(e.c_word) <= args.context_threshold]
 
         print("building vocab...")
-        self.CHAR.build_vocab(self.train, self.dev)
-        self.WORD.build_vocab(self.train, self.dev, vectors=GloVe(name='6B', dim=args.word_dim))
-
-        print("building iterators...")
-        print(args.gpu)
+        self.CHAR.build_vocab(self.train, self.dev, min_freq=10000)
+        self.WORD.build_vocab(self.train, self.dev, vectors=GloVe(name='6B', dim=args.word_dim), max_size=80000)
+       
         device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+        print("building iterators...")
         self.train_iter, self.dev_iter = \
             data.BucketIterator.splits((self.train, self.dev),
                                        batch_sizes=[args.train_batch_size, args.dev_batch_size],
+                                       sort=True,
                                        device=device,
                                        sort_key=lambda x: len(x.c_word))
 

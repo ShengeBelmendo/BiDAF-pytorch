@@ -6,3 +6,4 @@ test.py
 .idea*
 model/__py*
 utils/__*
+__pycache__
