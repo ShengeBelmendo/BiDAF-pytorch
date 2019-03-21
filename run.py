@@ -151,7 +151,7 @@ def main():
     parser.add_argument('--print-freq', default=250, type=int)
     parser.add_argument('--train-batch-size', default=40, type=int)
     parser.add_argument('--train-file', default='train-v1.1.json')
-    parser.add_argument('--word-dim', default=100, type=int)
+    parser.add_argument('--word-dim', default=200, type=int)
     parser.add_argument('--prediction_file', default='prediction.out')
     parser.add_argument('--id', default=0, type=int)
     args = parser.parse_args()
