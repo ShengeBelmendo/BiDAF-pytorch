@@ -181,7 +181,7 @@ class BiDAF(nn.Module):
         #         c_cat = torch.cat([c_char, c_word], dim=-1)
         #         q_cat = torch.cat([q_char, q_word], dim=-1)
         c = highway_network(c_word)
-        q = highway_network(c_word)
+        q = highway_network(q_word)
 
         # 3. Contextual Embedding Layer
         c = self.context_LSTM((c, c_lens))[0]
