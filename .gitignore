@@ -7,3 +7,12 @@ test.py
 model/__py*
 utils/__*
 __pycache__
+log/
+nohup.out
+predictions/
+run_2.sh
+runs/
+shell/
+submit.sh
+submit_single.sh
+

@@ -1,6 +1,8 @@
 import argparse
 import copy, json, os
 
+import random
+import numpy as np
 import torch
 import sys
 from torch import nn, optim
@@ -14,6 +16,12 @@ import evaluate
 
 
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 def train(args, data):
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -154,7 +162,10 @@ def main():
     parser.add_argument('--word-dim', default=100, type=int)
     parser.add_argument('--prediction_file', default='prediction.out')
     parser.add_argument('--id', default=0, type=int)
+    parser.add_argument('--random_seed', default=1, type=int)
     args = parser.parse_args()
+
+    set_seed(args.random_seed)
 
     print('loading SQuAD data...')
     data = SQuAD(args)
