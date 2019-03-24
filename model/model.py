@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.nn import LSTM, Linear
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
 class BiDAF(nn.Module):
@@ -195,8 +196,10 @@ class BiDAF(nn.Module):
 
         # 6. Output Layer
         p1, p2 = output_layer(g, m, c_lens)
-        p1_padded = F.pad(p1, (0, c_maxlen - p1.size()[-1]))
-        p2_padded = F.pad(p2, (0, c_maxlen - p2.size()[-1]))
+        p1,_ = pad_packed_sequence(p1, batch_first=True,
+                                        total_length=c_maxlen)
+        p2,_ = pad_packed_sequence(p1, batch_first=True,
+                                        total_length=c_maxlen)
 
         # (batch, c_len), (batch, c_len)
-        return p1_padded, p2_padded
+        return p1, p2
