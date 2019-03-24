@@ -172,8 +172,8 @@ class BiDAF(nn.Module):
         # 1. Character Embedding Layer
 
         c_maxlen = c_word.size()[1]
-        #         c_char = char_emb_layer(c_char)
-        #         q_char = char_emb_layer(q_char)
+        c_char = char_emb_layer(c_char)
+        q_char = char_emb_layer(q_char)
         # 2. Word Embedding Layer
         c_word = self.word_emb(c_word)
         q_word = self.word_emb(q_word)
@@ -181,12 +181,12 @@ class BiDAF(nn.Module):
         # Highway network
         c_cat = torch.cat([c_char, c_word], dim=-1)
         q_cat = torch.cat([q_char, q_word], dim=-1)
-        #c = highway_network(c_word)
-        #q = highway_network(q_word)
+        c = highway_network(c_cat)
+        q = highway_network(q_cat)
 
         # 3. Contextual Embedding Layer
-        c = self.context_LSTM((c_cat, c_lens))[0]
-        q = self.context_LSTM((q_cat, q_lens))[0]
+        c = self.context_LSTM((c, c_lens))[0]
+        q = self.context_LSTM((q, q_lens))[0]
 
         # 4. Attention Flow Layer
         g = att_flow_layer(c, q)
