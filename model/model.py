@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.nn import LSTM, Linear
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
 class BiDAF(nn.Module):
@@ -21,13 +22,14 @@ class BiDAF(nn.Module):
         self.word_emb = nn.Embedding.from_pretrained(pretrained, freeze=True)
 
         # highway network
-        assert self.args.hidden_size * 2 == (self.args.char_channel_size + self.args.word_dim)
+        # assert self.args.hidden_size * 2 == (self.args.char_channel_size + self.args.word_dim)
+        assert self.args.word_dim == 2 * self.args.hidden_size
         for i in range(2):
             setattr(self, f'highway_linear{i}',
-                    nn.Sequential(Linear(args.hidden_size * 2, args.hidden_size * 2),
+                    nn.Sequential(Linear(2 * args.hidden_size, 2 * args.hidden_size),
                                   nn.ReLU(inplace=True)))
             setattr(self, f'highway_gate{i}',
-                    nn.Sequential(Linear(args.hidden_size * 2, args.hidden_size * 2),
+                    nn.Sequential(Linear(2 * args.hidden_size, 2 * args.hidden_size),
                                   nn.Sigmoid()))
 
         # 3. Contextual Embedding Layer
@@ -67,9 +69,9 @@ class BiDAF(nn.Module):
                                 batch_first=True,
                                 dropout=args.dropout)
 
-        self.dropout = nn.Dropout(p=args.dropout,inplace=True)
+        self.dropout = nn.Dropout(p=args.dropout, inplace=True)
 
-    def forward(self, c_char,q_char,c_word,q_word,c_lens,q_lens):
+    def forward(self, c_char, q_char, c_word, q_word, c_lens, q_lens):
         # TODO: More memory-efficient architecture
         def char_emb_layer(x):
             """
@@ -90,14 +92,13 @@ class BiDAF(nn.Module):
 
             return x
 
-        def highway_network(x1, x2):
+        def highway_network(x):
             """
             :param x1: (batch, seq_len, char_channel_size)
             :param x2: (batch, seq_len, word_dim)
             :return: (batch, seq_len, hidden_size * 2)
             """
             # (batch, seq_len, char_channel_size + word_dim)
-            x = torch.cat([x1, x2], dim=-1)
             for i in range(2):
                 h = getattr(self, f'highway_linear{i}')(x)
                 g = getattr(self, f'highway_gate{i}')(x)
@@ -115,18 +116,18 @@ class BiDAF(nn.Module):
             q_len = q.size(1)
 
             # (batch, c_len, q_len, hidden_size * 2)
-            #c_tiled = c.unsqueeze(2).expand(-1, -1, q_len, -1)
+            # c_tiled = c.unsqueeze(2).expand(-1, -1, q_len, -1)
             # (batch, c_len, q_len, hidden_size * 2)
-            #q_tiled = q.unsqueeze(1).expand(-1, c_len, -1, -1)
+            # q_tiled = q.unsqueeze(1).expand(-1, c_len, -1, -1)
             # (batch, c_len, q_len, hidden_size * 2)
-            #cq_tiled = c_tiled * q_tiled
-            #cq_tiled = c.unsqueeze(2).expand(-1, -1, q_len, -1) * q.unsqueeze(1).expand(-1, c_len, -1, -1)
+            # cq_tiled = c_tiled * q_tiled
+            # cq_tiled = c.unsqueeze(2).expand(-1, -1, q_len, -1) * q.unsqueeze(1).expand(-1, c_len, -1, -1)
 
             cq = []
             for i in range(q_len):
-                #(batch, 1, hidden_size * 2)
+                # (batch, 1, hidden_size * 2)
                 qi = q.select(1, i).unsqueeze(1)
-                #(batch, c_len, 1)
+                # (batch, c_len, 1)
                 ci = self.att_weight_cq(c * qi).squeeze()
                 cq.append(ci)
             # (batch, c_len, q_len)
@@ -169,40 +170,36 @@ class BiDAF(nn.Module):
             return p1, p2
 
         # 1. Character Embedding Layer
-       
 
         c_maxlen = c_word.size()[1]
-        c_char = char_emb_layer(c_char)
-        q_char = char_emb_layer(q_char)
+        #         c_char = char_emb_layer(c_char)
+        #         q_char = char_emb_layer(q_char)
         # 2. Word Embedding Layer
         c_word = self.word_emb(c_word)
         q_word = self.word_emb(q_word)
 
-
-
-
         # Highway network
-        c = highway_network(c_char, c_word)
-        q = highway_network(q_char, q_word)
-        
+        c_cat = torch.cat([c_char, c_word], dim=-1)
+        q_cat = torch.cat([q_char, q_word], dim=-1)
+        #c = highway_network(c_word)
+        #q = highway_network(q_word)
 
-	# 3. Contextual Embedding Layer
-        c = self.context_LSTM((c, c_lens))[0]
-        q = self.context_LSTM((q, q_lens))[0]
-        
-
+        # 3. Contextual Embedding Layer
+        c = self.context_LSTM((c_cat, c_lens))[0]
+        q = self.context_LSTM((q_cat, q_lens))[0]
 
         # 4. Attention Flow Layer
         g = att_flow_layer(c, q)
 
         # 5. Modeling Layer
         m = self.modeling_LSTM2((self.modeling_LSTM1((g, c_lens))[0], c_lens))[0]
-      
+
         # 6. Output Layer
         p1, p2 = output_layer(g, m, c_lens)
-        p1_padded = F.pad(p1,(0,c_maxlen-p1.size()[-1]))
-        p2_padded = F.pad(p2,(0,c_maxlen-p2.size()[-1]))
-        
+        p1,_ = pad_packed_sequence(p1, batch_first=True,
+                                        total_length=c_maxlen)
+        p2,_ = pad_packed_sequence(p1, batch_first=True,
+                                        total_length=c_maxlen)
 
         # (batch, c_len), (batch, c_len)
-        return p1_padded, p2_padded
+        return p1, p2
