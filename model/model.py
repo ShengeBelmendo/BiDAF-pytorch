@@ -122,7 +122,7 @@ class BiDAF(nn.Module):
             # cq = []
             c_ex = c.unsqueeze(2).expand(-1,-1,q_len,-1)
             q_ex = q.unsqueeze(1).expand(-1, c_len, -1, -1)
-            s = self.att_weight_cq(torch.cat((c_ex,q_ex,c_ex*q_ex),dim=-1)).unsqueeze(1)
+            s = self.att_weight_cq(torch.cat((c_ex,q_ex,c_ex*q_ex),dim=-1)).squeeze()
 
 
             # (batch, c_len, q_len)
@@ -183,10 +183,8 @@ class BiDAF(nn.Module):
 
         # 6. Output Layer
         p1, p2 = output_layer(g, m, c_lens)
-        p1,_ = pad_packed_sequence(p1, batch_first=True,
-                                        total_length=c_maxlen)
-        p2,_ = pad_packed_sequence(p1, batch_first=True,
-                                        total_length=c_maxlen)
+        p1_padded = F.pad(p1, (0, c_maxlen - p1.size()[-1]))
+        p2_padded = F.pad(p2, (0, c_maxlen - p2.size()[-1]))
 
         # (batch, c_len), (batch, c_len)
-        return p1, p2
+        return p1_padded, p2
