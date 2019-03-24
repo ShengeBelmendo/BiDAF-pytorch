@@ -40,9 +40,7 @@ class BiDAF(nn.Module):
                                  dropout=args.dropout)
 
         # 4. Attention Flow Layer
-        self.att_weight_c = Linear(args.hidden_size * 2, 1)
-        self.att_weight_q = Linear(args.hidden_size * 2, 1)
-        self.att_weight_cq = Linear(args.hidden_size * 2, 1)
+        self.att_weight_cq = Linear(args.hidden_size * 6, 1)
 
         # 5. Modeling Layer
         self.modeling_LSTM1 = LSTM(input_size=args.hidden_size * 8,
@@ -58,10 +56,8 @@ class BiDAF(nn.Module):
                                    dropout=args.dropout)
 
         # 6. Output Layer
-        self.p1_weight_g = Linear(args.hidden_size * 8, 1, dropout=args.dropout)
-        self.p1_weight_m = Linear(args.hidden_size * 2, 1, dropout=args.dropout)
-        self.p2_weight_g = Linear(args.hidden_size * 8, 1, dropout=args.dropout)
-        self.p2_weight_m = Linear(args.hidden_size * 2, 1, dropout=args.dropout)
+        self.p1_weight = Linear(args.hidden_size * 10, 1, dropout=args.dropout)
+        self.p2_weight = Linear(args.hidden_size * 10, 1, dropout=args.dropout)
 
         self.output_LSTM = LSTM(input_size=args.hidden_size * 2,
                                 hidden_size=args.hidden_size,
@@ -123,20 +119,11 @@ class BiDAF(nn.Module):
             # cq_tiled = c_tiled * q_tiled
             # cq_tiled = c.unsqueeze(2).expand(-1, -1, q_len, -1) * q.unsqueeze(1).expand(-1, c_len, -1, -1)
 
-            cq = []
-            for i in range(q_len):
-                # (batch, 1, hidden_size * 2)
-                qi = q.select(1, i).unsqueeze(1)
-                # (batch, c_len, 1)
-                ci = self.att_weight_cq(c * qi).squeeze()
-                cq.append(ci)
-            # (batch, c_len, q_len)
-            cq = torch.stack(cq, dim=-1)
+            # cq = []
+            c_ex = c.unsqueeze(2).expand(-1,-1,q_len,-1)
+            q_ex = q.unsqueeze(1).expand(-1, c_len, -1, -1)
+            s = self.att_weight_cq(torch.cat((c_ex,q_ex,c_ex*q_ex),dim=-1)).unsqueeze(1)
 
-            # (batch, c_len, q_len)
-            s = self.att_weight_c(c).expand(-1, -1, q_len) + \
-                self.att_weight_q(q).permute(0, 2, 1).expand(-1, c_len, -1) + \
-                cq
 
             # (batch, c_len, q_len)
             a = F.softmax(s, dim=2)
@@ -161,11 +148,11 @@ class BiDAF(nn.Module):
             :return: p1: (batch, c_len), p2: (batch, c_len)
             """
             # (batch, c_len)
-            p1 = (self.p1_weight_g(g) + self.p1_weight_m(m)).squeeze()
+            p1 = (self.p1_weight(torch.cat((g,m),dim=-1))).squeeze()
             # (batch, c_len, hidden_size * 2)
             m2 = self.output_LSTM((m, l))[0]
             # (batch, c_len)
-            p2 = (self.p2_weight_g(g) + self.p2_weight_m(m2)).squeeze()
+            p2 = (self.p2_weight(torch.cat((g,m),dim=-1))).squeeze()
 
             return p1, p2
 
