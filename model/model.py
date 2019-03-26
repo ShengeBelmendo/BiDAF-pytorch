@@ -152,7 +152,7 @@ class BiDAF(nn.Module):
             # (batch, c_len, hidden_size * 2)
             m2 = self.output_LSTM((m, l))[0]
             # (batch, c_len)
-            p2 = (self.p2_weight(torch.cat((g,m),dim=-1))).squeeze()
+            p2 = (self.p2_weight(torch.cat((g,m2),dim=-1))).squeeze()
 
             return p1, p2
 
