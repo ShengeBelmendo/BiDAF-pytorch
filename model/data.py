@@ -66,8 +66,8 @@ class SQuAD():
             self.train.examples = [e for e in self.train.examples if len(e.c_word) <= args.context_threshold]
 
         print("building vocab...")
-        self.CHAR.build_vocab(self.train, self.dev, min_freq=10000)
-        self.WORD.build_vocab(self.train, self.dev, vectors=GloVe(name='6B', dim=args.word_dim), max_size=80000)
+        self.CHAR.build_vocab(self.train, self.dev)
+        self.WORD.build_vocab(self.train, self.dev, vectors=GloVe(name='6B', dim=args.word_dim))
        
         device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
         print("building iterators...")
