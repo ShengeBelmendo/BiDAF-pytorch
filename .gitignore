@@ -15,4 +15,5 @@ runs/
 shell/
 submit.sh
 submit_single.sh
-
+bert-base-uncased
+output/

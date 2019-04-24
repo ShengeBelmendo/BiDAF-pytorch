@@ -7,6 +7,8 @@ from torchtext import data
 from torchtext import datasets
 from torchtext.vocab import GloVe
 
+from allennlp.modules.elmo import Elmo
+
 
 def word_tokenize(tokens):
     return [token.replace("''", '"').replace("``", '"') for token in nltk.word_tokenize(tokens)]
@@ -80,7 +82,7 @@ class SQuAD():
 
     def preprocess_file(self, path):
         dump = []
-        abnormals = [' ', '\n', '\u3000', '\u202f', '\u2009']
+        abnormals = [' ', '\n','\t','\r','\u3000', '\u202f', '\u2009']
 
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)

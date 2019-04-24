@@ -58,6 +58,8 @@ def train(args, data):
             print('epoch:', present_epoch + 1)
         last_epoch = present_epoch
 
+        print(batch.c_word[0].size())
+        print(batch.c_word[1].size())
         p1, p2 = model(batch.c_char,batch.q_char,batch.c_word[0],batch.q_word[0],batch.c_word[1],batch.q_word[1])
 
         optimizer.zero_grad()
