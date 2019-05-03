@@ -30,7 +30,6 @@ from time import localtime, strftime
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 from tqdm import tqdm, trange
-from model.model import BiDAF
 
 from pytorch_pretrained_bert.modeling import BertModel
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
@@ -125,15 +124,16 @@ parser.add_argument('--char-dim', default=8, type=int)
 parser.add_argument('--char-channel-width', default=5, type=int)
 parser.add_argument('--char-channel-size', default=100, type=int)
 parser.add_argument('--dropout', default=0.2, type=float)
-parser.add_argument('--epoch', default=15, type=int)
+parser.add_argument('--epoch', default=5, type=int)
 parser.add_argument('--exp-decay-rate', default=0.999, type=float)
 parser.add_argument('--gpu', default=0, type=int)
 parser.add_argument('--hidden-size', default=100, type=int)
-parser.add_argument('--learning-rate', default=0.5, type=float)
+parser.add_argument('--learning-rate', default=5e-5, type=float)
 parser.add_argument('--print-freq', default=250, type=int)
 parser.add_argument('--word-dim', default=100, type=int)
 parser.add_argument('--id', default=0, type=int)
 parser.add_argument('--bert-layer-size', default=768, type=int)
+parser.add_argument('--saved_model', default=None, type=str)
 
 args = parser.parse_args()
 
@@ -633,19 +633,14 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             
             
             if start_index >= len(feature.doc_tokens):
-                print(f'start index {start_index} out of len\n')
                 continue
             if end_index >= len(feature.doc_tokens):
-                print(f'end index {end_index} out of len\n')
                 continue
             if start_index not in feature.token_to_orig_map:
-                print(f'start index {start_index} not in map\n')
                 continue
             if end_index not in feature.token_to_orig_map:
-                print(f'end index {end_index} not in map\n')
                 continue
             if not feature.token_is_max_context.get(start_index, False):
-                print(f'not max context')
                 continue 
             prelim_predictions.append(
                 _PrelimPrediction(
@@ -1161,6 +1156,7 @@ else:
 bert = BertModel.from_pretrained(args.bert_model)
 bert.to(device)
 model = BiDAF(args).to(device)
+model.load_state_dict(torch.load(args.saved_model))
 if args.local_rank != -1:
     bert = torch.nn.parallel.DistributedDataParallel(bert, device_ids=[args.local_rank],
                                                       output_device=args.local_rank)
@@ -1229,20 +1225,33 @@ train_sampler = RandomSampler(train_data)
 
 
 train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
-parameters = filter(lambda p: p.requires_grad, model.parameters())
+BiDAF_parameters = filter(lambda p: p.requires_grad, model.parameters())
+
+bert_param_optimizer = list(bert.named_parameters())
+bert_param_optimizer = [n for n in bert_param_optimizer if 'pooler' not in n[0]]
+
+no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+optimizer_grouped_parameters = [
+    {'params': list(BiDAF_parameters), 'weight_decay': 0.01},
+    {'params': [p for n, p in bert_param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+    {'params': [p for n, p in bert_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+]
 criterion = nn.CrossEntropyLoss()
 #optimizer = BertAdam(parameters,
 #                     lr=args.learning_rate,
 #                     warmup=args.warmup_proportion,
 #                     t_total=num_train_optimization_steps)
 
-optimizer = optim.Adadelta(parameters, lr=args.learning_rate)
+optimizer = BertAdam(optimizer_grouped_parameters,
+                     lr=args.learning_rate,
+                     warmup=args.warmup_proportion,
+                     t_total=num_train_optimization_steps)
 
 # In[16]:
 
 
 model.train()
-bert.eval()
+bert.train()
 setattr(args, 'model_time', strftime('%Y.%m.%d-%H:%M:%S',localtime()))
 loss, last_epoch = 0, -1
 max_dev_exact, max_dev_f1 = -1, -1
@@ -1277,16 +1286,19 @@ for epochs in trange(int(args.epoch), desc="Epoch"):
             if dev_f1 > max_dev_f1:
                 max_dev_f1 = dev_f1
                 max_dev_exact = dev_exact
-                best_model = copy.deepcopy(model)
+                best_bidaf_model = copy.deepcopy(model)
+                best_bert_model = copy.deepcopy(bert)
 
             loss = 0
-            model.train() 
+            model.train()
+            bert.train()
         sys.stdout.flush()
         
 
 args.max_f1 = max_dev_f1
 print(f'max dev EM: {max_dev_exact:.3f} / max dev F1: {max_dev_f1:.3f}')
-torch.save(best_model.state_dict(), f'saved_models/{args.model_time}_BiDAF{args.id}__F1{args.max_f1:5.2f}.pt')
+torch.save(best_bidaf_model.state_dict(), f'saved_models/{args.model_time}_BiDAF_finetune{args.id}__F1{args.max_f1:5.2f}.pt')
+torch.save(best_bert_model.state_dict(), f'saved_models/{args.model_time}_BERT_finetune{args.id}__F1{args.max_f1:5.2f}.pt')
 print('training finished!')
 
 

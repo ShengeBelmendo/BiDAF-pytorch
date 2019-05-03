@@ -17,3 +17,4 @@ submit.sh
 submit_single.sh
 bert-base-uncased
 output/
+*.tar.gz
