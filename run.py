@@ -12,7 +12,7 @@ from time import localtime, strftime
 from model.model import BiDAF
 from model.data import SQuAD
 from model.ema import EMA
-import evaluate
+import cmrc2018_evaluate
 
 
 
@@ -25,6 +25,7 @@ def set_seed(seed):
 
 def train(args, data):
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    #device = torch.device("cpu")
     model = BiDAF(args, data.WORD.vocab.vectors).to(device)
     if torch.cuda.device_count() > 1:
         print("Let's use", torch.cuda.device_count(), "GPUs!")
@@ -58,7 +59,7 @@ def train(args, data):
             print('epoch:', present_epoch + 1)
         last_epoch = present_epoch
 
-        p1, p2 = model(batch.c_char,batch.q_char,batch.c_word[0],batch.q_word[0],batch.c_word[1],batch.q_word[1])
+        p1, p2 = model(batch.c_word[0],batch.q_word[0],batch.c_word[1],batch.q_word[1])
 
         optimizer.zero_grad()
         batch_loss = criterion(p1, batch.s_idx) + criterion(p2, batch.e_idx)
@@ -111,7 +112,7 @@ def test(model, ema, args, data):
 
     for batch in iter(data.dev_iter):
         with torch.no_grad():
-            p1, p2 = model(batch.c_char,batch.q_char,batch.c_word[0],batch.q_word[0],batch.c_word[1],batch.q_word[1])
+            p1, p2 = model(batch.c_word[0],batch.q_word[0],batch.c_word[1],batch.q_word[1])
         #p1, p2 = model(batch)
         batch_loss = criterion(p1, batch.s_idx) + criterion(p2, batch.e_idx)
         loss += batch_loss.item()
@@ -128,8 +129,9 @@ def test(model, ema, args, data):
         for i in range(batch_size):
             id = batch.id[i]
             answer = batch.c_word[0][i][s_idx[i]:e_idx[i] + 1]
-            answer = ' '.join([data.WORD.vocab.itos[idx] for idx in answer])
+            answer = ''.join([data.WORD.vocab.itos[idx] for idx in answer])
             answers[id] = answer
+            print(f'answer {answer}')
 
     for name, param in model.named_parameters():
         if param.requires_grad:
@@ -138,7 +140,13 @@ def test(model, ema, args, data):
     with open(args.prediction_file, 'w', encoding='utf-8') as f:
         print(json.dumps(answers), file=f)
 
-    results = evaluate.main(args)
+    ground_truth_file   = json.load(open(args.dataset_file, 'rb'))
+    prediction_file     = json.load(open(args.prediction_file, 'rb'))
+    F1, EM, TOTAL, SKIP = cmrc2018_evaluate.evaluate(ground_truth_file, prediction_file)
+    results = {}
+    results['exact_match'] = EM
+    results['f1'] = F1
+
     return loss, results['exact_match'], results['f1']
 
 
@@ -147,19 +155,19 @@ def main():
     parser.add_argument('--char-dim', default=8, type=int)
     parser.add_argument('--char-channel-width', default=5, type=int)
     parser.add_argument('--char-channel-size', default=100, type=int)
-    parser.add_argument('--context-threshold', default=400, type=int)
-    parser.add_argument('--dev-batch-size', default=100, type=int)
-    parser.add_argument('--dev-file', default='dev-v1.1.json')
+    parser.add_argument('--context-threshold', default=1000, type=int)
+    parser.add_argument('--dev-batch-size', default=10, type=int)
+    parser.add_argument('--dev-file', default='cmrc2018_dev.json')
     parser.add_argument('--dropout', default=0.2, type=float)
     parser.add_argument('--epoch', default=15, type=int)
     parser.add_argument('--exp-decay-rate', default=0.999, type=float)
     parser.add_argument('--gpu', default=0, type=int)
-    parser.add_argument('--hidden-size', default=100, type=int)
+    parser.add_argument('--hidden-size', default=150, type=int)
     parser.add_argument('--learning-rate', default=0.5, type=float)
-    parser.add_argument('--print-freq', default=250, type=int)
-    parser.add_argument('--train-batch-size', default=40, type=int)
-    parser.add_argument('--train-file', default='train-v1.1.json')
-    parser.add_argument('--word-dim', default=100, type=int)
+    parser.add_argument('--print-freq', default=10, type=int)
+    parser.add_argument('--train-batch-size', default=4, type=int)
+    parser.add_argument('--train-file', default='cmrc2018_train_converted_bert.json')
+    parser.add_argument('--word-dim', default=300, type=int)
     parser.add_argument('--prediction_file', default='prediction.out')
     parser.add_argument('--id', default=0, type=int)
     parser.add_argument('--random_seed', default=1, type=int)
@@ -168,11 +176,10 @@ def main():
     set_seed(args.random_seed)
 
     print('loading SQuAD data...')
-    data = SQuAD(args)
-    setattr(args, 'char_vocab_size', len(data.CHAR.vocab))
-    setattr(args, 'word_vocab_size', len(data.WORD.vocab))
+    sdata = SQuAD(args)
+    setattr(args, 'word_vocab_size', len(sdata.WORD.vocab))
     setattr(args, 'max_f1', 0)
-    setattr(args, 'dataset_file', f'.data/squad/{args.dev_file}')
+    setattr(args, 'dataset_file', f'.data/cmrc/{args.dev_file}')
     setattr(args, 'model_time', strftime('%Y.%m.%d-%H:%M:%S',localtime()) )
     if not os.path.exists('predictions'):
         os.makedirs('predictions')
@@ -182,7 +189,7 @@ def main():
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     print(torch.cuda.is_available())
     print('training start!')
-    best_model = train(args, data)
+    best_model = train(args, sdata)
     if not os.path.exists('saved_models'):
         os.makedirs('saved_models')
     torch.save(best_model.state_dict(), f'saved_models/{args.model_time}_BiDAF{args.id}__F1{args.max_f1:5.2f}.pt')

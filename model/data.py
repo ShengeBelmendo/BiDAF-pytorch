@@ -6,15 +6,22 @@ import torch
 from torchtext import data
 from torchtext import datasets
 from torchtext.vocab import GloVe
+from torchtext.vocab import Vectors
+
+
+def is_whitespace(c):
+    if c == " " or c == "\t" or c == "\r" or c == "\n" or ord(c) in [0x202F, 0x3000, 0x2009]:
+        return True
+    return False
 
 
 def word_tokenize(tokens):
-    return [token.replace("''", '"').replace("``", '"') for token in nltk.word_tokenize(tokens)]
+    return [character for character in tokens if not is_whitespace(character)]
 
 
 class SQuAD():
     def __init__(self, args):
-        path = '.data/squad'
+        path = '.data/cmrc'
         dataset_path = path + '/torchtext/'
         train_examples_path = dataset_path + 'train_examples.pt'
         dev_examples_path = dataset_path + 'dev_examples.pt'
@@ -26,20 +33,18 @@ class SQuAD():
             self.preprocess_file(f'{path}/{args.dev_file}')
 
         self.RAW = data.RawField()
-        self.CHAR_NESTING = data.Field(batch_first=True, tokenize=list, lower=True)
-        self.CHAR = data.NestedField(self.CHAR_NESTING, tokenize=word_tokenize)
         self.WORD = data.Field(batch_first=True, tokenize=word_tokenize, lower=True, include_lengths=True)
         self.LABEL = data.Field(sequential=False, unk_token=None, use_vocab=False)
 
         dict_fields = {'id': ('id', self.RAW),
                        's_idx': ('s_idx', self.LABEL),
                        'e_idx': ('e_idx', self.LABEL),
-                       'context': [('c_word', self.WORD), ('c_char', self.CHAR)],
-                       'question': [('q_word', self.WORD), ('q_char', self.CHAR)]}
+                       'context': ('c_word', self.WORD),
+                       'question': ('q_word', self.WORD)}
 
         list_fields = [('id', self.RAW), ('s_idx', self.LABEL), ('e_idx', self.LABEL),
-                       ('c_word', self.WORD), ('c_char', self.CHAR),
-                       ('q_word', self.WORD), ('q_char', self.CHAR)]
+                       ('c_word', self.WORD),
+                       ('q_word', self.WORD)]
 
         if os.path.exists(dataset_path):
             print("loading splits...")
@@ -61,14 +66,14 @@ class SQuAD():
             torch.save(self.train.examples, train_examples_path)
             torch.save(self.dev.examples, dev_examples_path)
 
-        #cut too long context in the training set for efficiency.
+        # cut too long context in the training set for efficiency.
         if args.context_threshold > 0:
             self.train.examples = [e for e in self.train.examples if len(e.c_word) <= args.context_threshold]
 
         print("building vocab...")
-        self.CHAR.build_vocab(self.train, self.dev)
-        self.WORD.build_vocab(self.train, self.dev, vectors=GloVe(name='6B', dim=args.word_dim))
-       
+        vectors = Vectors(name="sgns.context.word-character.char1-1.dynwin5.thr10.neg5.dim300.iter5",
+                          cache=".vector_cache")
+        self.WORD.build_vocab(self.train, self.dev, vectors=vectors)
         device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
         print("building iterators...")
         self.train_iter, self.dev_iter = \
@@ -80,8 +85,8 @@ class SQuAD():
 
     def preprocess_file(self, path):
         dump = []
-        abnormals = [' ', '\n', '\u3000', '\u202f', '\u2009']
 
+        context_length = []
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             data = data['data']
@@ -89,35 +94,30 @@ class SQuAD():
             for article in data:
                 for paragraph in article['paragraphs']:
                     context = paragraph['context']
-                    tokens = word_tokenize(context)
+                    tokens = list(context)
+                    context_length.append(len(tokens))
+                    clear_tokens = word_tokenize(context)
                     for qa in paragraph['qas']:
                         id = qa['id']
                         question = qa['question']
                         for ans in qa['answers']:
                             answer = ans['text']
+                            answer_text = ''
+                            answer = answer_text.join([i for i in answer if not is_whitespace(i)])
                             s_idx = ans['answer_start']
-                            e_idx = s_idx + len(answer)
+                            origin_s_idx = ans['answer_start']
+                            if s_idx < 0:
+                                break
+                            e_idx = s_idx + len(answer) - 1
 
-                            l = 0
+                            num = []
                             s_found = False
                             for i, t in enumerate(tokens):
-                                while l < len(context):
-                                    if context[l] in abnormals:
-                                        l += 1
-                                    else:
-                                        break
-                                # exceptional cases
-                                if t[0] == '"' and context[l:l + 2] == '\'\'':
-                                    t = '\'\'' + t[1:]
-                                elif t == '"' and context[l:l + 2] == '\'\'':
-                                    t = '\'\''
-
-                                l += len(t)
-                                if l > s_idx and s_found == False:
-                                    s_idx = i
-                                    s_found = True
-                                if l >= e_idx:
-                                    e_idx = i
+                                if i < origin_s_idx:
+                                    if is_whitespace(t):
+                                        s_idx = s_idx - 1
+                                        e_idx = e_idx - 1
+                                else:
                                     break
 
                             dump.append(dict([('id', id),

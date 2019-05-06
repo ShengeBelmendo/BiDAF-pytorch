@@ -15,4 +15,7 @@ runs/
 shell/
 submit.sh
 submit_single.sh
-
+*.tar.gz
+output/
+bert-base-uncased/
+saved_models/
